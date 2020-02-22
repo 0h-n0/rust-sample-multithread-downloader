@@ -1,10 +1,11 @@
 extern crate curl;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::mpsc::{channel, sync_channel};
 use std::sync::Arc;
 use std::thread;
 
-fn download(url: &PathBuf, filename: &PathBuf) -> std::io::Result<()> {
+fn download(url: &str, filename: &PathBuf) -> std::io::Result<()> {
     println!("Now downloading data from {:?}", url);
     if filename.exists() {
         println!("{:?} already exsits.", filename);
@@ -13,7 +14,7 @@ fn download(url: &PathBuf, filename: &PathBuf) -> std::io::Result<()> {
     let f = std::fs::File::create(&filename)?;
     let mut writer = std::io::BufWriter::new(f);
     let mut easy = curl::easy::Easy::new();
-    easy.url(url.to_str().unwrap())?;
+    easy.url(url)?;
     easy.write_function(move |data| Ok(writer.write(data).unwrap()))?;
     easy.perform()?;
     let response_code = easy.response_code()?;
@@ -28,7 +29,10 @@ fn download(url: &PathBuf, filename: &PathBuf) -> std::io::Result<()> {
     }
 }
 
-fn simple_multithread_download(urls: Vec<PathBuf>, filenames: Vec<PathBuf>) {
+type URLS = Vec<&'static str>;
+type FILES = Vec<PathBuf>;
+
+fn simple_multithread_downloader(urls: URLS, filenames: FILES) {
     let urls = Arc::new(urls);
     let filenames = Arc::new(filenames);
     let n = urls.len();
@@ -41,8 +45,46 @@ fn simple_multithread_download(urls: Vec<PathBuf>, filenames: Vec<PathBuf>) {
         childs.push(c);
     }
     for c in childs {
-        c.join().unwrap();
+        let _ = c.join().unwrap();
     }
+}
+
+fn channel_multithread_downloader(urls: URLS, filenames: FILES) {
+    let (tx, rx) = channel();
+    let n = urls.len();
+    let join_handle = thread::spawn(move || loop {
+        match rx.recv() {
+            Ok(data) => {
+                let (url, filename) = data;
+                let _ = download(url, &filename);
+                ()
+            }
+            Err(_) => thread::yield_now(),
+        }
+    });
+    for i in 0..n {
+        tx.send((urls[i], filenames[i].clone())).unwrap()
+    }
+    join_handle.join().unwrap();
+}
+
+fn sync_channel_multithread_downloader(urls: URLS, filenames: FILES, n_workers: usize) {
+    let (tx, rx) = sync_channel(n_workers);
+    let n = urls.len();
+    let join_handle = thread::spawn(move || loop {
+        match rx.recv() {
+            Ok(data) => {
+                let (url, filename) = data;
+                let _ = download(url, &filename);
+                ()
+            }
+            Err(_) => thread::yield_now(),
+        }
+    });
+    for i in 0..n {
+        tx.send((urls[i], filenames[i].clone())).unwrap()
+    }
+    join_handle.join().unwrap();
 }
 
 #[cfg(test)]
@@ -51,23 +93,55 @@ mod tests {
 
     #[test]
     fn download_test() {
-        let mut url = PathBuf::from("https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg");
-        let mut filename = PathBuf::from("/tmp/Rust_programming_language_black_logo_test1.svg");
+        let url = "https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg";
+        let filename = PathBuf::from("/tmp/Rust_programming_language_black_logo_test1.svg");
         let _status = download(&url, &filename).unwrap();
         assert!(filename.exists());
         let _status = std::fs::remove_file(filename);
     }
 
     #[test]
-    fn simple_multithread_download_test() {
-        let urls = vec![PathBuf::from("https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg"),
-                        PathBuf::from("https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/240px-Rust_programming_language_black_logo.svg.png")];
+    fn simple_multithread_downloader_test() {
+        let urls = vec!["https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg",
+                        "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/240px-Rust_programming_language_black_logo.svg.png"];
         let filenames = vec![
             PathBuf::from("/tmp/Rust_programming_language_black_logo.svg"),
             PathBuf::from("/tmp/240px-Rust_programming_language_black_logo.svg.png"),
         ];
         let filenames_cloned = filenames.clone();
-        simple_multithread_download(urls, filenames);
+        simple_multithread_downloader(urls, filenames);
+        for f in filenames_cloned {
+            assert!(f.exists());
+            let _status = std::fs::remove_file(f);
+        }
+    }
+    #[test]
+    #[ignore = "I'dont know how to a thread. Could you tell me?"]
+    fn channel_multithread_downloader_test() {
+        let urls = vec!["https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg",
+                        "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/240px-Rust_programming_language_black_logo.svg.png"];
+        let filenames = vec![
+            PathBuf::from("/tmp/Rust_programming_language_black_logo-2.svg"),
+            PathBuf::from("/tmp/240px-Rust_programming_language_black_logo.svg-2.png"),
+        ];
+        let filenames_cloned = filenames.clone();
+        channel_multithread_downloader(urls, filenames);
+        for f in filenames_cloned {
+            assert!(f.exists());
+            let _status = std::fs::remove_file(f);
+        }
+    }
+    #[test]
+    #[ignore = "I'dont know how to a thread. Could you tell me?"]
+    fn sync_channel_multithread_downloader_test() {
+        let urls = vec!["https://upload.wikimedia.org/wikipedia/commons/d/d5/Rust_programming_language_black_logo.svg",
+                        "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d5/Rust_programming_language_black_logo.svg/240px-Rust_programming_language_black_logo.svg.png"];
+        let filenames = vec![
+            PathBuf::from("/tmp/Rust_programming_language_black_logo-3.svg"),
+            PathBuf::from("/tmp/240px-Rust_programming_language_black_logo.svg-3.png"),
+        ];
+        let filenames_cloned = filenames.clone();
+        sync_channel_multithread_downloader(urls, filenames, 1);
         for f in filenames_cloned {
             assert!(f.exists());
             let _status = std::fs::remove_file(f);
