@@ -5,7 +5,7 @@ use std::sync::mpsc::{channel, sync_channel};
 use std::sync::Arc;
 use std::thread;
 
-fn download(url: &str, filename: &PathBuf) -> std::io::Result<()> {
+pub fn download(url: &str, filename: &PathBuf) -> std::io::Result<()> {
     println!("Now downloading data from {:?}", url);
     if filename.exists() {
         println!("{:?} already exsits.", filename);
@@ -32,7 +32,7 @@ fn download(url: &str, filename: &PathBuf) -> std::io::Result<()> {
 type URLS = Vec<&'static str>;
 type FILES = Vec<PathBuf>;
 
-fn simple_multithread_downloader(urls: URLS, filenames: FILES) {
+pub fn simple_multithread_downloader(urls: URLS, filenames: FILES) {
     let urls = Arc::new(urls);
     let filenames = Arc::new(filenames);
     let n = urls.len();
@@ -49,7 +49,7 @@ fn simple_multithread_downloader(urls: URLS, filenames: FILES) {
     }
 }
 
-fn channel_multithread_downloader(urls: URLS, filenames: FILES) {
+pub fn channel_multithread_downloader(urls: URLS, filenames: FILES) {
     let (tx, rx) = channel();
     let n = urls.len();
     let join_handle = thread::spawn(move || loop {
@@ -68,7 +68,7 @@ fn channel_multithread_downloader(urls: URLS, filenames: FILES) {
     join_handle.join().unwrap();
 }
 
-fn sync_channel_multithread_downloader(urls: URLS, filenames: FILES, n_workers: usize) {
+pub fn sync_channel_multithread_downloader(urls: URLS, filenames: FILES, n_workers: usize) {
     let (tx, rx) = sync_channel(n_workers);
     let n = urls.len();
     let join_handle = thread::spawn(move || loop {
